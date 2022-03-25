@@ -1,0 +1,94 @@
+---
+title: "data prep - group 9"
+author: 'Younchan Son, Silvan Michael Hofer, Ka Wing NG, Joanna '
+date: "25. March 2022"
+output:
+  html_document:
+    theme: united
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#install.packages("quanteda")
+#install.packages("quanteda.textplots")
+
+library(quanteda)
+library(quanteda.textplots)
+```
+
+
+
+# Data preparation 
+## 1. Load data
+We have to be careful with the data since it is encoded in UTF-8. If we do not change the encoding, some symbols are wrongly recognized. 
+```{r}
+reviews <- read.csv("game_train.csv", encoding = "UTF-8")
+games <- read.csv("games.csv", encoding = "UTF-8")
+
+```
+
+## 2. Combine data
+We combine the reviews with data about the game. We notice that the dataset is relatively balanced so we do not have to over or undersample it. 
+```{r}
+data <- merge(reviews, games, by.x = "title", by.y = "title", all.x = T)
+sum(data$user_suggestion)
+```
+```{r, echo=FALSE}
+rm(reviews, games)
+```
+
+## 3. Clean data
+
+### 3.1 Remove Tags
+The Start of the reviews had tags in them which provide further information. These are removed and put into a separate column. 
+```{r}
+data$is.early <- ifelse(grepl("Early Access Review", data$user_review), 1, 0)
+data$user_review <- gsub("Early Access Review","", data$user_review)
+
+data$received.free <- ifelse(grepl("Product received for free", data$user_review), 1, 0)
+data$user_review <- gsub("Product received for free","", data$user_review)
+
+data$user_review <- gsub("Access Review", "", data$user_review) #unclear, just remove it
+```
+
+### 3.2 Create Document Term Matrix
+Quanteda handily provides a function which does converts all characters to lower, removes punctuation, stopwords and URLs.
+```{r}
+revcorpus <- corpus(data$user_review)
+```
+We want to remove certain stopwords. To make sure to not accidentally throw out wrong ones, we look at the standards stopwords. 
+```{r}
+stopwords("english")
+```
+We see some we want to keep and als add one to thow out. 
+```{r}
+custom.stopwords <- c(stopwords("english")[!stopwords("english") %in% c("no", "nor","not")], "░")
+
+doc.term <- dfm(x = revcorpus, 
+                tolower=TRUE, 
+                stem=TRUE, 
+                remove_punct = TRUE, 
+                remove_url=TRUE, 
+                verbose=FALSE, 
+                remove = custom.stopwords)
+
+
+topfeatures(doc.term, 25)
+```
+We also trim the matrix
+```{r}
+doc.term <- dfm_trim(doc.term, min_docfreq=10, verbose=TRUE)
+```
+
+```{r}
+textplot_wordcloud(doc.term, rotation=0, min_size=2, max_size=10, max_words=50)
+```
+```{r}
+data.export <- convert(doc.term, to = "data.frame")
+writexl::write_xlsx(data.export, file = "doc.term matrix.xlsx")
+```
+
