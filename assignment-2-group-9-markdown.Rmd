@@ -18,6 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(quanteda)
 library(quanteda.textplots)
+library(writexl)
 ```
 
 
@@ -89,6 +90,6 @@ textplot_wordcloud(doc.term, rotation=0, min_size=2, max_size=10, max_words=50)
 ```
 ```{r}
 data.export <- convert(doc.term, to = "data.frame")
-writexl::write_xlsx(data.export, file = "doc.term matrix.xlsx")
+write.csv(data.export, file = "doc.term matrix")
 ```
 
