@@ -15,10 +15,14 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r, include=FALSE}
 #install.packages("quanteda")
 #install.packages("quanteda.textplots")
+#install.packages("quanteda.textmodels")
 
 library(quanteda)
 library(quanteda.textplots)
+library(quanteda.textmodels)
+library(glmnet)
 library(writexl)
+library(caret)
 ```
 
 
@@ -29,7 +33,7 @@ We have to be careful with the data since it is encoded in UTF-8. If we do not c
 ```{r}
 reviews <- read.csv("game_train.csv", encoding = "UTF-8")
 games <- read.csv("games.csv", encoding = "UTF-8")
-
+data.kaggle <- read.csv("game_test.csv", encoding = "UTF-8")
 ```
 
 ## 2. Combine data
@@ -37,6 +41,10 @@ We combine the reviews with data about the game. We notice that the dataset is r
 ```{r}
 data <- merge(reviews, games, by.x = "title", by.y = "title", all.x = T)
 sum(data$user_suggestion)
+
+data$doc_id <- 1:nrow(data)
+train.id <- sample(1:nrow(data), 0.7*nrow(data))
+test.id <- data$doc_id[!data$doc_id %in% train.id]
 ```
 ```{r, echo=FALSE}
 rm(reviews, games)
@@ -49,17 +57,28 @@ The Start of the reviews had tags in them which provide further information. The
 ```{r}
 data$is.early <- ifelse(grepl("Early Access Review", data$user_review), 1, 0)
 data$user_review <- gsub("Early Access Review","", data$user_review)
+data.kaggle$user_review <- gsub("Early Access Review","", data.kaggle$user_review)
 
 data$received.free <- ifelse(grepl("Product received for free", data$user_review), 1, 0)
 data$user_review <- gsub("Product received for free","", data$user_review)
+data.kaggle$user_review <- gsub("Product received for free","", data.kaggle$user_review)
+
 
 data$user_review <- gsub("Access Review", "", data$user_review) #unclear, just remove it
+data.kaggle$user_review <- gsub("Access Review","", data.kaggle$user_review)
 ```
 
 ### 3.2 Create Document Term Matrix
 Quanteda handily provides a function which does converts all characters to lower, removes punctuation, stopwords and URLs.
 ```{r}
-revcorpus <- corpus(data$user_review)
+revcorpus <- corpus(x = data, 
+                    docid_field ="doc_id", 
+                    text_field = "user_review", 
+                    meta = list("user_suggestion" = "user_suggestion")
+                    )
+revcorpus.kaggle <- corpus(x = data.kaggle, 
+                           text_field = "user_review"
+                    )
 ```
 We want to remove certain stopwords. To make sure to not accidentally throw out wrong ones, we look at the standards stopwords. 
 ```{r}
@@ -77,19 +96,101 @@ doc.term <- dfm(x = revcorpus,
                 verbose=FALSE, 
                 remove = custom.stopwords)
 
+doc.term.kaggle <- dfm(x = revcorpus.kaggle, 
+                tolower=TRUE, 
+                stem=TRUE, 
+                remove_punct = TRUE, 
+                remove_url=TRUE, 
+                verbose=FALSE, 
+                remove = custom.stopwords)
 
-topfeatures(doc.term, 25)
+topfeatures(doc.term, 10)
 ```
 We also trim the matrix
 ```{r}
 doc.term <- dfm_trim(doc.term, min_docfreq=10, verbose=TRUE)
+
 ```
 
 ```{r}
 textplot_wordcloud(doc.term, rotation=0, min_size=2, max_size=10, max_words=50)
 ```
+
+###Split into train and test
+```{r}
+data.train <- dfm_subset(x = doc.term, docname_ %in% train.id)
+data.test <- dfm_subset(x = doc.term, docname_ %in% test.id)
+```
+
+###Match same features
+```{r}
+data.test <- dfm_match(data.test, features = featnames(data.train))
+data.kaggle <- dfm_match(doc.term.kaggle, features = featnames(data.train))
+
+```
+
+##Train naive bayes
+```{r}
+naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion)
+summary(naive.bayes)
+```
+
+##make prediction
+```{r}
+actual_class <- data.test$user_suggestion
+predicted_class <- predict(naive.bayes, newdata = data.test)
+tab_class <- table(actual_class, predicted_class)
+tab_class
+```
+```{r}
+confusionMatrix(tab_class, mode = "everything")
+```
+
+
+#make prediction for Kaggle
+```{r}
+prediction.kaggle <- data.frame(predict(naive.bayes, newdata = data.kaggle))
+
+
+prediction.kaggle <- data.frame(matrix(ncol = 2, nrow = nrow(data.kaggle)))
+prediction.kaggle[, 1] <- data.kaggle$review_id
+prediction.kaggle[, 2] <- data.frame(predict(naive.bayes, newdata = data.kaggle))
+names(prediction.kaggle)<- c("review_id", "user_suggestion")
+```
+
+#train gmlnet
+
+
+```{r}
+lasso <- cv.glmnet(x = data.train,
+                   y = as.integer(data.train$user_suggestion == "1"),
+                   alpha = 1,
+                   nfold = 100,
+                   family = "binomial")
+
+
+prediction.gml <- predict(lasso, data.test, type = "response", s = lasso$lambda.min)
+```
+
+
+##make prediction
+```{r}
+actual_class <- data.test$user_suggestion
+predicted_class <- as.integer(predict(lasso, newx = data.test, type = "class", s = lasso$lambda.min))
+tab_class <- table(actual_class, predicted_class)
+tab_class
+confusionMatrix(tab_class, mode = "everything")
+```
+```{r}
+
+```
+
+
+
+#save prediction
 ```{r}
 data.export <- convert(doc.term, to = "data.frame")
 write.csv(data.export, file = "doc.term matrix")
+write.csv(prediction.kaggle, file = "predictions.csv", row.names = F)
 ```
 
