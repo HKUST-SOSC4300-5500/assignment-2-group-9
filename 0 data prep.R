@@ -7,6 +7,8 @@ library(glmnet)
 library(randomForest)
 library(writexl)
 library(caret)
+library(xgboost)
+
 #install.packages("lexicon")
 
 rm(list = ls())
@@ -106,7 +108,7 @@ doc.term <- dfm(toks)
 topfeatures(doc.term, 20)
 
 
-doc.term <- dfm_trim(doc.term, min_docfreq=20, verbose=TRUE)
+doc.term <- dfm_trim(doc.term, min_docfreq=10, verbose=TRUE)
 print (dim(doc.term))
 
 
@@ -181,13 +183,28 @@ confusionMatrix(tab_class, mode = "everything")
 
 data.export <- convert(data.train, to = "data.frame")
 
-data.export <- na.omit(data.export)
+#data.export <- na.omit(data.export)
 data.export <- data.export[, -1]
-forrest <- rfcv(trainx = data.export, trainy = as.integer(data.train$user_suggestion))
+test <- as.matrix(data.export)
+
+xgboost <- xgboost(data = as.matrix(data.export), label = data.train$user_suggestion, 
+                   nrounds = 5000,
+                   objective = "binary:logistic",
+                   max.depth = 3,
+                   eta = 1)
 
 
 
-forest <- randomForest(x = data.export, y = data.train$user_suggestion)
+actual_class <- data.test$user_suggestion
+predicted_class <- predict(xgboost, newdata = data.test)
+tab_class <- table(actual_class, as.numeric(predicted_class > 0.5))
+tab_class
+
+
+confusionMatrix(tab_class, mode = "everything")
+
+
+
 
 #save prediction
 
