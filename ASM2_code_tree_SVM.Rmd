@@ -1,0 +1,388 @@
+---
+title: "data prep - group 9"
+author: 'Younchan Son, Silvan Michael Hofer, Ka Wing NG, Joanna '
+date: "25. March 2022"
+output:
+  html_document:
+    theme: united
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#install.packages("quanteda")
+#install.packages("quanteda.textplots")
+#install.packages("quanteda.textmodels")
+
+library(quanteda)
+library(quanteda.textplots)
+library(quanteda.textmodels)
+library(glmnet)
+library(writexl)
+library(caret)
+```
+
+
+
+# Data preparation 
+## 1. Load data
+We have to be careful with the data since it is encoded in UTF-8. If we do not change the encoding, some symbols are wrongly recognized. 
+```{r}
+reviews <- read.csv("game_train.csv", encoding = "UTF-8")
+games <- read.csv("games.csv", encoding = "UTF-8")
+data.kaggle <- read.csv("game_test.csv", encoding = "UTF-8")
+```
+
+## 2. Combine data
+We combine the reviews with data about the game. We notice that the dataset is relatively balanced so we do not have to over or undersample it. 
+```{r}
+data <- merge(reviews, games, by.x = "title", by.y = "title", all.x = T)
+sum(data$user_suggestion)
+
+data$doc_id <- 1:nrow(data)
+train.id <- sample(1:nrow(data), 0.7*nrow(data))
+test.id <- data$doc_id[!data$doc_id %in% train.id]
+```
+```{r, echo=FALSE}
+rm(reviews, games)
+```
+
+## 3. Clean data
+
+### 3.1 Remove Tags
+The Start of the reviews had tags in them which provide further information. These are removed and put into a separate column. 
+```{r}
+data$is.early <- ifelse(grepl("Early Access Review", data$user_review), 1, 0)
+data$user_review <- gsub("Early Access Review","", data$user_review)
+data.kaggle$user_review <- gsub("Early Access Review","", data.kaggle$user_review)
+
+data$received.free <- ifelse(grepl("Product received for free", data$user_review), 1, 0)
+data$user_review <- gsub("Product received for free","", data$user_review)
+data.kaggle$user_review <- gsub("Product received for free","", data.kaggle$user_review)
+
+
+data$user_review <- gsub("Access Review", "", data$user_review) #unclear, just remove it
+data.kaggle$user_review <- gsub("Access Review","", data.kaggle$user_review)
+```
+
+### 3.2 Create Document Term Matrix
+Quanteda handily provides a function which does converts all characters to lower, removes punctuation, stopwords and URLs.
+```{r}
+library("corpus")
+revcorpus <- corpus(x = data, 
+                    docid_field ="doc_id", 
+                    text_field = "user_review", 
+                    meta = list("user_suggestion" = "user_suggestion")
+                    )
+revcorpus.kaggle <- corpus(x = data.kaggle, 
+                           text_field = "user_review"
+                    )
+```
+We want to remove certain stopwords. To make sure to not accidentally throw out wrong ones, we look at the standards stopwords. 
+```{r}
+stopwords("english")
+```
+We see some we want to keep and also add one to thow out. 
+```{r}
+custom.stopwords <- c(stopwords("english")[!stopwords("english") %in% c("no", "nor","not")], "░")
+
+doc.term <- dfm(x = revcorpus, 
+                tolower=TRUE, 
+                stem=TRUE, 
+                remove_punct = TRUE, 
+                remove_url=TRUE, 
+                verbose=FALSE, 
+                remove = custom.stopwords)
+
+doc.term.kaggle <- dfm(x = revcorpus.kaggle, 
+                tolower=TRUE, 
+                stem=TRUE, 
+                remove_punct = TRUE, 
+                remove_url=TRUE, 
+                verbose=FALSE, 
+                remove = custom.stopwords)
+
+topfeatures(doc.term, 10)
+```
+We also trim the matrix
+```{r}
+doc.term <- dfm_trim(doc.term, min_docfreq=10, verbose=TRUE)
+
+```
+
+```{r}
+textplot_wordcloud(doc.term, rotation=0, min_size=2, max_size=10, max_words=50)
+```
+
+###Split into train and test
+```{r}
+data.train <- dfm_subset(x = doc.term, docname_ %in% train.id)
+data.test <- dfm_subset(x = doc.term, docname_ %in% test.id)
+```
+
+###Match same features
+```{r}
+data.test <- dfm_match(data.test, features = featnames(data.train))
+data.kaggle <- dfm_match(doc.term.kaggle, features = featnames(data.train))
+
+```
+
+##Train naive bayes
+```{r}
+naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion)
+summary(naive.bayes)
+```
+
+##make prediction
+```{r}
+actual_class <- data.test$user_suggestion
+predicted_class <- predict(naive.bayes, newdata = data.test)
+tab_class <- table(actual_class, predicted_class)
+tab_class
+```
+```{r}
+confusionMatrix(tab_class, mode = "everything")
+```
+
+
+#make prediction for Kaggle
+```{r}
+prediction.kaggle <- data.frame(predict(naive.bayes, newdata = data.kaggle))
+
+
+prediction.kaggle <- data.frame(matrix(ncol = 2, nrow = nrow(data.kaggle)))
+prediction.kaggle[, 1] <- data.kaggle$review_id
+prediction.kaggle[, 2] <- data.frame(predict(naive.bayes, newdata = data.kaggle))
+names(prediction.kaggle)<- c("review_id", "user_suggestion")
+```
+
+#train gmlnet
+
+
+```{r}
+lasso <- cv.glmnet(x = data.train,
+                   y = as.integer(data.train$user_suggestion == "1"),
+                   alpha = 1,
+                   nfold = 100,
+                   family = "binomial")
+
+
+prediction.gml <- predict(lasso, data.test, type = "response", s = lasso$lambda.min)
+```
+
+
+##make prediction
+```{r}
+actual_class <- data.test$user_suggestion
+predicted_class <- as.integer(predict(lasso, newx = data.test, type = "class", s = lasso$lambda.min))
+tab_class <- table(actual_class, predicted_class)
+tab_class
+confusionMatrix(tab_class, mode = "everything")
+```
+```{r}
+
+```
+
+
+#save prediction
+```{r}
+data.export <- convert(doc.term, to = "data.frame")
+write.csv(data.export, file = "doc.term matrix")
+write.csv(prediction.kaggle, file = "predictions.csv", row.names = F)
+```
+
+
+#Convert Data for decision tree & SVM
+```{r}
+library(caTools)
+try.train = convert(data.train, to = "data.frame")
+try.test = convert(data.test, to = "data.frame")
+try.kaggle = convert(data.kaggle, to = "data.frame")
+
+data_suggestion <- data.frame(data$user_suggestion, data$doc_id)
+try.data <- merge(try.train, data_suggestion, by.x = "doc_id", by.y = "doc_id")
+try.data <- merge(try.test, data_suggestion)
+
+
+try_data$doc_id <- NULL
+names(try_data)[1] <- 'user_suggestion'
+```
+
+```{r}
+try_data$user_suggestion = factor(try_data$user_suggestion, levels = c(0, 1))
+
+set.seed(123)
+split1<- sample(c(rep(0, 0.7 * nrow(data)), rep(1, 0.3 * nrow(data))))
+split1
+
+train <- try_data[split1 == 0, ] 
+test <- try_data[split1== 1, ]    
+
+```
+
+
+#Decision Tree Model
+##1. Default Parameter
+```{r}
+library(rpart)
+tree.model <- rpart(user_suggestion~., data = data.frame(train), method = 'class')
+predict.tree <-predict(dt, data.frame(test), type = 'class')
+
+#make confusion matrix
+tree_confused <- confusionMatrix(as.factor(test$user_suggestion),predict.tree)
+tree_confused
+
+precision <- tree_confused$byClass['Pos Pred Value']
+recall <- tree_confused$byClass['Sensitivity']
+
+f_measure <- 2*((precision*recall)/(precision+recall))
+
+f_measure
+```
+
+##2. tune parameter
+###2.1 minsplit:10, minbucket:5, maxdepth:10
+```{r}
+accuracy_tune <- function(fit) {
+    predict_unseen <- predict(fit, data.frame(test), type = 'class')
+    table_mat <- table(test$suggestion, predict_unseen)
+    accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+    accuracy_Test
+}
+
+control <- rpart.control(minsplit = 10,
+    minbucket = round(5 / 3),
+    maxdepth = 10,
+    cp = 0.01)
+
+tune_fit <- rpart(suggestion~., data = data.frame(train), method = 'class', control = control)
+
+predict_1 <-predict(tune_fit, data.frame(test), type = 'class')
+
+#make confusion matrix
+tree_confused <- confusionMatrix(as.factor(test$suggestion),predict_1)
+tree_confused
+
+precision <- tree_confused$byClass['Pos Pred Value']
+recall <- tree_confused$byClass['Sensitivity']
+
+f_measure <- 2*((precision*recall)/(precision+recall))
+
+f_measure
+```
+
+###2.2 minsplit:20, minbucket:100, maxdepth:30
+```{r}
+accuracy_tune <- function(fit) {
+    predict_unseen <- predict(fit, data.frame(test), type = 'class')
+    table_mat <- table(test$suggestion, predict_unseen)
+    accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+    accuracy_Test
+}
+
+control <- rpart.control(minsplit = 20,
+    minbucket = round(100 / 3),
+    maxdepth = 30,
+    cp = 0.01)
+
+tune_fit <- rpart(suggestion~., data = data.frame(train), method = 'class', control = control)
+
+predict_1 <-predict(tune_fit, data.frame(test), type = 'class')
+
+#make confusion matrix
+tree_confused <- confusionMatrix(as.factor(test$suggestion),predict_1)
+tree_confused
+
+precision <- tree_confused$byClass['Pos Pred Value']
+recall <- tree_confused$byClass['Sensitivity']
+
+f_measure <- 2*((precision*recall)/(precision+recall))
+
+f_measure
+```
+The best result is 0.56731 only
+
+
+#SVM Model
+```{r}
+library(e1071)
+library(rpart)
+library(class)
+
+#Scale the data
+train[-1] = scale(train[-1])
+test[-1] = scale(test[-1])
+```
+
+```{r}
+svm.model = svm(formula = user_suggestion ~ .,
+                 data = train,
+                 type = 'C-classification',
+                 kernel = 'linear')
+test_new <- test[-1]
+predict.svm1 = predict(svm.model, data = test, type="class")
+```
+
+```{r}
+#make confusion matrix
+svm_confused <- confusionMatrix(as.factor(test$user_suggestion),predict.svm2)
+svm_confused
+
+precision <- svm_confused$byClass['Pos Pred Value']
+recall <- svm_confused$byClass['Sensitivity']
+
+f_measure <- 2*((precision*recall)/(precision+recall))
+
+f_measure
+```
+
+#Tune Parameter for SVM
+```{r}
+#tune parameter
+svm.model2 <- svm(user_suggestion ~ ., data = train, cost = 100, gamma = 1)
+test_new <- test[-1]
+predict.svm2 = predict(svm.model2, data = test, type="class")
+```
+
+```{r}
+#make confusion matrix
+svm2_confused <- confusionMatrix(as.factor(test$user_suggestion),predict.svm2)
+svm2_confused
+
+precision <- svm2_confused$byClass['Pos Pred Value']
+recall <- svm2_confused$byClass['Sensitivity']
+
+f_measure <- 2*((precision*recall)/(precision+recall))
+
+f_measure
+
+```
+
+#Random Forest
+```{r}
+library(randomForest)
+library(datasets)
+library(caret)
+```
+
+```{r}
+rf.model <- randomForest(user_suggestion~., data=train, proximity=TRUE) 
+predict.rf <- predict(rf.model, data.frame(test))
+
+```
+```{r}
+#make confusion matrix
+rf_confused <- confusionMatrix(as.factor(test$user_suggestion),predict.rf)
+rf_confused
+
+precision <- rf_confused$byClass['Pos Pred Value']
+recall <- rf_confused$byClass['Sensitivity']
+
+f_measure <- 2*((precision*recall)/(precision+recall))
+
+f_measure
+```
+
