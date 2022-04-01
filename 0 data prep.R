@@ -79,8 +79,8 @@ custom.stopwords <- c(stopwords("english")[!stopwords("english") %in% stopwords.
 toks <- tokens(revcorpus, remove_punct = TRUE, remove_number = TRUE, remove_url = TRUE, verbose = FALSE) %>% 
   tokens_remove(pattern = custom.stopwords) %>% 
   tokens_tolower()%>%
-  tokens_replace(pattern = lexicon::hash_lemmas$token, replacement = lexicon::hash_lemmas$lemma)%>%
-  #tokens_wordstem()%>%
+  #tokens_replace(pattern = lexicon::hash_lemmas$token, replacement = lexicon::hash_lemmas$lemma)%>%
+  tokens_wordstem()%>%
   tokens_ngrams(n = 2)
   
 doc.term <- dfm(toks)
@@ -191,11 +191,9 @@ test <- as.matrix(data.export)
 xgboost <- xgboost(data = as.matrix(data.export), label = data.train$user_suggestion, 
                    nrounds = 1000,
                    objective = "binary:logistic",
-                   max.depth = 2,
-                   eta = 0.8, 
-                   
+                   max.depth = 3,
+                   eta = 0.15, 
                    )
-
 
 
 actual_class <- data.test$user_suggestion
@@ -204,26 +202,32 @@ tab_class <- table(actual_class, as.numeric(predicted_class > 0.5))
 tab_class
 
 
+predicted_class <- predict(xgboost, newdata = as.matrix(data.export))
+actual_class <- data.train$user_suggestion
+
+
+
+
 confusionMatrix(tab_class, mode = "everything")
 
 
 est_param <- list()
 best_seednumber <- 1234
-best_auc <- Inf
-best_auc_index <- 0
+best_error <- Inf
+best_error_index <- 0
 
 set.seed(123)
 for (iter in 1:100) {
   param <- list(objective = "binary:logistic",
-                eval_metric = "auc",
-                max_depth = sample(6:10, 1),
-                eta = runif(1, .01, .3), # Learning rate, default: 0.3
-                subsample = runif(1, .6, .9),
-                colsample_bytree = runif(1, .5, .8), 
-                min_child_weight = sample(1:40, 1),
-                max_delta_step = sample(1:10, 1)
+                eval_metric = "error",
+                max_depth = sample(1:10, 1),
+                eta = runif(1, .01, .1), # Learning rate, default: 0.3
+                subsample = runif(1, .8, .9),
+                colsample_bytree = runif(1, .5, .6), 
+                min_child_weight = sample(1:10, 1),
+                max_delta_step = sample(3:8, 1)
   )
-  cv.nround <-  200
+  cv.nround <-  300
   cv.nfold <-  5 # 5-fold cross-validation
   seed.number  <-  sample.int(10000, 1) # set seed for the cv
   set.seed(seed.number)
@@ -235,19 +239,21 @@ for (iter in 1:100) {
                  early_stopping_rounds = 8, 
                  maximize = FALSE)
   
-  min_auc_index  <-  mdcv$best_iteration
-  min_auc <-  mdcv$evaluation_log[min_rmse_index]$train_auc_mean
+  min_error_index  <-  mdcv$best_iteration
+  min_error <-  min(mdcv$evaluation_log$train_error_mean)
   
-  if (min_auc < best_auc) {
-    best_auc <- min_auc
-    best_auc_index <- min_auc_index
+  if (min_error < best_error) {
+    best_error <- min_error
+    best_error_index <- min_error_index
     best_seednumber <- seed.number
     best_param <- param
   }
+  print(iter)
+  
 }
 
 # The best index (min_rmse_index) is the best "nround" in the model
-nround = best_auc_index
+nround = best_error_index
 set.seed(best_seednumber)
 xg_mod <- xgboost(data = as.matrix(data.export), label = data.train$user_suggestion,  
                   params = best_param, 
@@ -263,6 +269,10 @@ tab_class
 
 confusionMatrix(tab_class, mode = "everything")
 
+
+
+predicted_class <- predict(xg_mod, newdata = as.matrix(data.export))
+actual_class <- data.train$user_suggestion
 
 
 
