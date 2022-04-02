@@ -17,10 +17,13 @@ knitr::opts_chunk$set(echo = TRUE)
 #install.packages("quanteda.textplots")
 #install.packages("quanteda.textmodels")
 
+#install_version('randomForest', "4.6-14")
+library(remotes)
 library(quanteda)
 library(quanteda.textplots)
 library(quanteda.textmodels)
 library(glmnet)
+library(randomForest)
 library(writexl)
 library(caret)
 ```
@@ -181,8 +184,15 @@ tab_class <- table(actual_class, predicted_class)
 tab_class
 confusionMatrix(tab_class, mode = "everything")
 ```
-```{r}
 
+
+
+#train random Forest
+
+```{r}
+data.export <- na.omit(data.export)
+data.export <- data.export[, -1]
+forrest <- rfcv(trainx = data.export, trainy = as.integer(data.train$user_suggestion))
 ```
 
 
@@ -193,4 +203,7 @@ data.export <- convert(doc.term, to = "data.frame")
 write.csv(data.export, file = "doc.term matrix")
 write.csv(prediction.kaggle, file = "predictions.csv", row.names = F)
 ```
+
+
+
 
