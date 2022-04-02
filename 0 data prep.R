@@ -10,7 +10,10 @@ library(caret)
 library(xgboost)
 library(stringr)
 
+library(gmodels)
 #install.packages("lexicon")
+#install.packages("gmodels")
+
 
 rm(list = ls())
 
@@ -81,7 +84,7 @@ toks <- tokens(revcorpus, remove_punct = TRUE, remove_number = TRUE, remove_url 
   tokens_tolower()%>%
   #tokens_replace(pattern = lexicon::hash_lemmas$token, replacement = lexicon::hash_lemmas$lemma)%>%
   tokens_wordstem()%>%
-  tokens_ngrams(n = 2)
+  tokens_ngrams(n = 1)
   
 doc.term <- dfm(toks)
 
@@ -109,7 +112,7 @@ doc.term <- dfm(toks)
 topfeatures(doc.term, 20)
 
 
-doc.term <- dfm_trim(doc.term, min_docfreq=10, verbose=TRUE)
+doc.term <- dfm_trim(doc.term, min_docfreq=50, verbose=TRUE)
 print (dim(doc.term))
 
 
@@ -201,7 +204,6 @@ predicted_class <- predict(xgboost, newdata = data.test)
 tab_class <- table(actual_class, as.numeric(predicted_class > 0.5))
 tab_class
 
-
 predicted_class <- predict(xgboost, newdata = as.matrix(data.export))
 actual_class <- data.train$user_suggestion
 
@@ -261,6 +263,7 @@ xg_mod <- xgboost(data = as.matrix(data.export), label = data.train$user_suggest
                   verbose = F)
 
 summary(xg_mod)
+
 # Check error in testing data
 predicted_class <- predict(xg_mod, data.test)
 actual_class <- data.test$user_suggestion
@@ -274,9 +277,51 @@ confusionMatrix(tab_class, mode = "everything")
 predicted_class <- predict(xg_mod, newdata = as.matrix(data.export))
 actual_class <- data.train$user_suggestion
 
+# 3. try dimensionality reduction ----
+#We saw that we could not really get anywhere with our current approach, therefore we try to reduce dimenstionality 
+data.export <- convert(data.train, to = "data.frame")
+data.export <- data.export[, -1]
 
 
-#save prediction
+reduced_train <- prcomp(as.matrix(data.export), retx = TRUE, center = T, scale. = FALSE, tol = NULL)
+reduced_test <- predict(reduced_train, as.matrix(data.test))
+
+
+reduced_train.mat <- reduced_train$x[, 1:1000]
+reduced_test.mat <- reduced_test[, 1:1000]
+
+
+
+#data.export <- na.omit(data.export)
+set.seed(1)
+xgboost <- xgboost(data = reduced_train.mat, label = data.train$user_suggestion, 
+                   nrounds = 150,
+                   objective = "binary:logistic",
+                   max.depth = 2,
+                   eta = 0.3, 
+)
+
+
+
+actual_class <- data.test$user_suggestion
+predicted_class <- predict(xgboost, newdata = reduced_test.mat)
+tab_class <- table(actual_class, as.numeric(predicted_class > 0.5))
+tab_class
+
+confusionMatrix(tab_class, mode = "prec_recall")
+
+
+
+predicted_class <- predict(xgboost, newdata = reduced_train.mat)
+actual_class <- data.train$user_suggestion
+tab_class <- table(actual_class, as.numeric(predicted_class > 0.5))
+tab_class
+
+confusionMatrix(tab_class, mode = "everything")
+
+
+
+#save prediction----
 
 data.export <- convert(doc.term, to = "data.frame")
 write.csv(data.export, file = "doc.term matrix")
