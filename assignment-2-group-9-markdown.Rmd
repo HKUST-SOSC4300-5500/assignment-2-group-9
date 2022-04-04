@@ -205,9 +205,20 @@ data.kaggle.red <- data.kaggle.red[, 1:1000]
 
 
 #Train models  
-##1. Train naive bayes
+Make results replicable
 ```{r}
-naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion)
+set.seed(10)
+```
+
+##1. Train naive bayes
+implement and easy first approximation to get a baseline result. Termfrequency without Bernoulli (with multinomial) performs best better
+```{r}
+naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion, prior = "termfreq")
+#naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion, prior = "termfreq", distribution = "Bernoulli")
+
+#naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion, prior = "docfreq")
+#naive.bayes <- textmodel_nb(data.train, data.train$user_suggestion, prior = "docfreq", distribution = "Bernoulli" )
+
 #summary(naive.bayes)
 ```
 ###make prediction
@@ -217,86 +228,127 @@ predicted_class <- predict(naive.bayes, newdata = data.test)
 tab_class <- table(actual_class, predicted_class)
 tab_class
 ```
+0.79, already quite decent. 
 ```{r}
 confusionMatrix(tab_class, mode = "everything")
 ```
 
 
-#make prediction for Kaggle
+###make prediction for Kaggle
 After some time, we have an easy first version to predict. 
 ```{r}
-prediction.kaggle <- data.frame(predict(naive.bayes, newdata = data.kaggle))
-
-
 prediction.kaggle <- data.frame(matrix(ncol = 2, nrow = nrow(data.kaggle)))
+
 prediction.kaggle[, 1] <- data.kaggle$review_id
 prediction.kaggle[, 2] <- data.frame(predict(naive.bayes, newdata = data.kaggle))
 names(prediction.kaggle)<- c("review_id", "user_suggestion")
+
+write.csv(prediction.kaggle, file = "predictions.kaggle.naive.bayes.csv", row.names = F)
 ```
+
 
 ## 2. gmlnet
+Before we could not use the reduced frame because of the data type, now we can use it. We use a normal lasso approach to start with and find the lambda for minimal error. We use familiy = binomial which performs a logistic regression. This makes sense since we are predicting a binary variable. 
 ```{r}
-lasso <- cv.glmnet(x = data.train,
+lasso <- cv.glmnet(x = data.train.red,
                    y = as.integer(data.train$user_suggestion == "1"),
                    alpha = 1,
-                   nfold = 100,
+                   nfold = 5,
                    family = "binomial")
 
-
-prediction.gml <- predict(lasso, data.test, type = "response", s = lasso$lambda.min)
+prediction.gml <- predict(lasso, data.test.red, type = "response", s = lasso$lambda.min)
+plot(lasso)
 ```
 
-
-##make prediction
+###make prediction
 ```{r}
 actual_class <- data.test$user_suggestion
-predicted_class <- as.integer(predict(lasso, newx = data.test, type = "class", s = lasso$lambda.min))
+predicted_class <- as.integer(predict(lasso, newx = data.test.red, type = "class", s = lasso$lambda.min))
 tab_class <- table(actual_class, predicted_class)
 tab_class
+
 confusionMatrix(tab_class, mode = "everything")
 ```
-
-
-
-#train random Forest
+We also did a 100 fold CV. This didn't fare much better and takes long to run so we leave it out here. 
 ```{r}
-data.export <- na.omit(data.export)
-data.export <- data.export[, -1]
-forrest <- rfcv(trainx = data.export, trainy = as.integer(data.train$user_suggestion))
+run <- F
+if(run){
+  lasso <- cv.glmnet(x = data.train.red,
+                     y = as.integer(data.train$user_suggestion == "1"),
+                     alpha = 1,
+                     nfold = 100,
+                     family = "binomial")
+  
+  prediction.gml <- predict(lasso, data.test.red, type = "response", s = lasso$lambda.min)
+  
+  actual_class <- data.test$user_suggestion
+  predicted_class <- as.integer(predict(lasso, newx = data.test.red, type = "class", s = lasso$lambda.min))
+  tab_class <- table(actual_class, predicted_class)
+  tab_class
+
+  confusionMatrix(tab_class, mode = "everything")
+}
+plot(lasso)
 ```
 
-
-
-#save prediction
+So far we just did Lasso (alpha = 1). Now we try ridge (alpha = 0)
 ```{r}
-data.export <- convert(doc.term, to = "data.frame")
-write.csv(data.export, file = "doc.term matrix")
-write.csv(prediction.kaggle, file = "predictions.csv", row.names = F)
+
+ridge <- cv.glmnet(x = data.train.red,
+                   y = as.integer(data.train$user_suggestion == "1"),
+                   alpha = 0,
+                   nfold = 10,
+                   family = "binomial")
+
+prediction.gml <- predict(ridge, data.test.red, type = "response", s = ridge$lambda.min)
+
+plot(ridge)
+```
+```{r}
+actual_class <- data.test$user_suggestion
+predicted_class <- as.integer(predict(ridge, newx = data.test.red, type = "class", s = ridge$lambda.min))
+tab_class <- table(actual_class, predicted_class)
+tab_class
+
+confusionMatrix(tab_class, mode = "everything")
+```
+Ridge performs worse than Lasso. We could not go on to tune alpha further. However, since both options perform similar or worse than naive bayes, we skip to gradient boosting. 
+
+```{r}
+prediction.kaggle <- data.frame(matrix(ncol = 2, nrow = nrow(data.kaggle.red)))
+
+prediction.kaggle[, 1] <- data.kaggle$review_id
+prediction.kaggle[, 2] <- data.frame(predict(ridge, newx = data.kaggle.red))
+names(prediction.kaggle)<- c("review_id", "user_suggestion")
+
+write.csv(prediction.kaggle, file = "predictionskaggle.gmlnet.csv", row.names = F)
+
 ```
 
+## 3. XGBoost
+We were also thinking of doing random forrests. However, since XGboost already works with trees and generally performs better, we directly jump to gradient boosting. 
 
-##XGBoost
-
+### Create Dummies
+We add the title of the games to the data since it maybe also holds some information. Some games can be better or worse. 
 ```{r}
-
 dummies <-  data.frame(data[train.id, "title"])
-names(dummies) <- "title"
-
-dummies <- dummy_cols(dummies,select_columns = "title")
-dummies$title <- NULL
-
-
 dummies.test <-  data.frame(data[test.id, "title"])
+names(dummies) <- "title"
 names(dummies.test) <- "title"
 
+dummies <- dummy_cols(dummies,select_columns = "title")
 dummies.test <- dummy_cols(dummies.test,select_columns = "title")
+dummies$title <- NULL
 dummies.test$title <- NULL
-
 
 data.train.red <- cbind(data.train.red, dummies)
 data.test.red <- cbind(data.test.red, dummies.test)
+```
 
-dtrain <- xgb.DMatrix(data = data.train.red, label = data.train$user_suggestion) 
+### Set number of rounds
+To get an idea of how many rounds of training we will need, we first train a basic version and see what number of round gives the best cross validated result. We found it to be 66 rounds. We use that as a basis for further tuning. 
+```{r}
+dtrain <- xgb.DMatrix(data = as.matrix(data.train.red), label = data.train$user_suggestion) 
 dtest <- xgb.DMatrix(data = as.matrix(data.test.red),label = data.test$user_suggestion)
 
 
@@ -309,20 +361,24 @@ params <- list(booster = "gbtree",
                subsample=1, 
                colsample_bytree=1)
 
-xgbcv <- xgb.cv( params = params, data = data.train.red,label = data.train$user_suggestion,
+xgbcv <- xgb.cv( params = params, data = dtrain,
                  nrounds = 1000, 
                  nfold = 5, 
                  showsd = T, 
                  stratified = T, 
                  print.every.n = 10, 
-                 early.stop.round = 20, 
+                 early.stop.round = 20,  
                  maximize = F)
+```
 
+### Create first model
+We use 68 rounds to train and test a first model. 
+```{r}
 xgb1 <- xgb.train (params = params, 
                   data = dtrain,
-                  nrounds = 171, 
+                  nrounds = 66, 
                   watchlist = list(val=dtest,train=dtrain), 
-                  print.every.n = 10, 
+                  print.every.n = 20, 
                   early.stop.round = 10, 
                   maximize = F , 
                   eval_metric = "error")
@@ -335,28 +391,36 @@ tab_class <- table(actual_class, predicted_class)
 tab_class
 confusionMatrix(tab_class, mode = "everything")
 
+```
+F1 is not very good. However we see that the train error is massively lower than test error, indicating overfitting. Therefore, we still can tune parameter to try to reduce overfitting. 
 
-train <- as.data.frame(data.export)
+### Create training task
+To tune the parameters, we create a task. 
+```{r}
+train <- as.data.frame(data.train.red)
+test <- as.data.frame(data.test.red)
+
 colnames(train) <- make.names(colnames(train),unique = T)
-train$user_suggestion <- data.train$user_suggestion
-
-test <- as.data.frame(data.test.tes)
 colnames(test) <- make.names(colnames(test),unique = T)
+
 test$user_suggestion <- data.test$user_suggestion
-
-
+train$user_suggestion <- data.train$user_suggestion
 
 traintask <- makeClassifTask (data = train ,target = "user_suggestion")
 testtask <- makeClassifTask (data = test,target = "user_suggestion")
+```
 
+
+### We set up tuning by using the glm package. 
+```{r}
 #create learner
 lrn <- makeLearner("classif.xgboost",predict.type = "response")
 lrn$par.vals <- list( objective="binary:logistic", eval_metric="error", 
-                      nrounds=171L)
+                      nrounds=66)
 
 #set parameter space
 params <- makeParamSet( makeDiscreteParam("booster",
-                                          values = c("gbtree","gblinear")), 
+                                          values = c("gbtree")), 
                         makeIntegerParam("max_depth",lower = 2L,upper = 6L), 
                         makeNumericParam("min_child_weight",lower = 1L,upper = 10L), 
                         makeNumericParam("subsample",lower = 0.5,upper = 1), 
@@ -366,9 +430,13 @@ params <- makeParamSet( makeDiscreteParam("booster",
 #set resampling strategy
 rdesc <- makeResampleDesc("CV",stratify = T,iters=5L)
 ctrl <- makeTuneControlRandom(maxit = 100)
+```
 
+### Tune parameters
+```{r}
 mytune <- tuneParams(learner = lrn, task = traintask, resampling = rdesc, measures = acc, par.set = params, control = ctrl, show.info = T)
 mytune$y
+
 mytune$opt.path$par.set$
 lrn_tune <- setHyperPars(lrn,par.vals = mytune$x)
 
