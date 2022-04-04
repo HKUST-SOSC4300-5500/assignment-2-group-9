@@ -567,7 +567,11 @@ tab_class
 
 confusionMatrix(tab_class, mode = "everything")
 ```
+##Discussion
+The scores are rather underwhelming. Since we also used other algorithms on Python which performed significantly better and actually beat naive bayes, glmnet, random forrest, knn and xgboost and other models by a very large margin, we didn't go any further in tuning. 
 
-The scores are rather underwhelming. Since we also used other algorithm on Python which performed significantly better and actually beat naive bayes, compared to glmnet, xgboost and other models who did not, we didn't go any further in tuning. 
-
-If we were to further try it with XGBosst we would try the following things: 1. tune more here, make a larger grid run tuning for longer. 2. Try it with 2-grams more. We tried 2-grams with naive bayes and Glmnet but it didn't yield better results, so went back to 1-grams. We could also try it with XGboost or even try 3-grams etc. 3. we could use other dimensionality reducing techniques or refrain form using the reduced dataset for glmnet or xgboost. Since we would expect that to take more time to tune and it already takes long now, we also didn't do it. 
+If we were to further try it with we would do the following things: 
+1. tune more: make a (larger) grid and run tuning for longer. 
+2. Try it with 2-grams more. We tried 2-grams with naive bayes and Glmnet but it didn't yield better results, so went back to 1-grams. We could also try it with XGboost or other methods or even try 3-grams etc. 
+3. We could use other dimensionality reducing techniques or refrain form using the reduced dataset for glmnet or xgboost. 
+To conclude, we attenpted some tuning but after seeing the differences in performance did not pursue it more since we did not think that we could rival the performance of the python models. 
