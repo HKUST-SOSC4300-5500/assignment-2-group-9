@@ -451,5 +451,6 @@ xgpred <- predict(xgmodel,testtask)
 
 confusionMatrix(xgpred$data$response,xgpred$data$truth, mode = "everything")
 ```
-
+The scores are rather underwhelming. Since we also used other algorithm on Python which performed significantly better and actually beat naive bayes, compared to glmnet and xgboost who did not, we didn't go any further in tuning. 
+If we were to further try it with XGBosst we would try the following things: 1. tune more here, make a larger grid run tuning for longer. 2. Try it with 2-grams more. We tried 2-grams with naive bayes and Glmnet but it didn't yield better results, so went back to 1-grams. We could also try it with XGboost or even try 3-grams etc. 3. we could use other dimensionality reducing techniques or refrain form using the reduced dataset for glmnet or xgboost. Since we would expect that to take more time to tune and it already takes long now, we also didn't do it. 
 
