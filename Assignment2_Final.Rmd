@@ -568,7 +568,9 @@ tab_class
 confusionMatrix(tab_class, mode = "everything")
 ```
 ##Discussion
-The scores are rather underwhelming. Since we also used other algorithms on Python which performed significantly better and actually beat naive bayes, glmnet, random forrest, knn and xgboost and other models by a very large margin, we didn't go any further in tuning. 
+First, we did did a lot of preprocessing: turing it into right format (docterm matrix) with stemming, removing punctioation, and removing stopwords. There, we made sure not to use the whole standard dictionary since that contains some words we want to keep (e.g. "not"). Then, we trimmed it and reduced dimensionality for some compuational intensive models. We then used this prepared data for our models. 
+
+However, the performance is rather underwhelming. Since we also used other algorithms on Python which performed significantly better and actually beat naive bayes, glmnet, random forrest, knn and xgboost and other models by a very large margin, we ended up not doing as much tuning as planned. 
 
 If we were to further try it with we would do the following things: 
 1. tune more: make a (larger) grid and run tuning for longer. 
