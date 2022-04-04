@@ -1,5 +1,5 @@
 ---
-title: "data prep - group 9"
+title: "Assignmet 2 - Group 9"
 author: 'Younchan Son, Silvan Michael Hofer, Ka Wing NG, Joanna '
 date: "25. March 2022"
 output:
@@ -43,7 +43,7 @@ library(fpc)
 rm(list = ls()) #clear environment
 ```
 
-
+#PART I
 
 # Data preparation 
 ## 1. Load data
@@ -70,6 +70,7 @@ data$doc_id <- 1:nrow(data)
 train.id <- sample(1:nrow(data), 0.7*nrow(data))
 test.id <- data$doc_id[!data$doc_id %in% train.id]
 ```
+
 ```{r, echo=FALSE}
 rm(reviews, games)
 ```
@@ -183,19 +184,19 @@ print (dim(doc.term))
 textplot_wordcloud(doc.term, rotation=0, min_size=2, max_size=10, max_words=50)
 ```
 
-###Split into train and test
+###3.3 Split into train and test
 ```{r}
 data.train <- dfm_subset(x = doc.term, docname_ %in% train.id)
 data.test <- dfm_subset(x = doc.term, docname_ %in% test.id)
 ```
 
-###Match same features
+###3.4 Match same features
 ```{r}
 data.test <- dfm_match(data.test, features = featnames(data.train))
 data.kaggle <- dfm_match(doc.term.kaggle, features = featnames(data.train))
 ```
 
-###Dimensionality reduction
+###3.5 Dimensionality reduction
 To reduce the amount of Columns and make the algorithm faster and less prone to overfitting, we reduce the dimensionality. 
 ```{r}
 data.train.red <- convert(data.train, to = "data.frame")
@@ -248,7 +249,7 @@ confusionMatrix(tab_class, mode = "everything")
 ```
 
 
-###make prediction for Kaggle
+###Prediction for Kaggle
 After some time, we have an easy first version to predict. 
 ```{r}
 prediction.kaggle <- data.frame(matrix(ncol = 2, nrow = nrow(data.kaggle)))
@@ -466,10 +467,214 @@ xgpred <- predict(xgmodel,testtask)
 confusionMatrix(xgpred$data$response,xgpred$data$truth, mode = "everything")
 ```
 
+#PART II
 
-##4. CART model
+In this second part, we tried different preparation to see whether it would have better F1 score.
+
+# Data preparation 
+## 1. Load data
+We have to be careful with the data since it is encoded in UTF-8. If we do not change the encoding, some symbols are wrongly recognized. 
 ```{r}
-tree=rpart(formula = user_suggestion ~ ., data = data.train, method="class",control = rpart.control(minsplit = 200,  minbucket = 30, cp = 0.0001))
+rm(list = ls()) #clear environment
+reviews <- read.csv("game_train.csv", encoding = "UTF-8")
+games <- read.csv("games.csv", encoding = "UTF-8")
+data.kaggle <- read.csv("game_test.csv", encoding = "UTF-8")
+```
+
+## 2. Combine data
+We combine the reviews with data about the game. We notice that the dataset is relatively balanced so we do not have to over or undersample it. 
+```{r}
+data <- merge(reviews, games, by.x = "title", by.y = "title", all.x = T)
+sum(data$user_suggestion)
+
+data$doc_id <- 1:nrow(data)
+train.id <- sample(1:nrow(data), 0.7*nrow(data))
+test.id <- data$doc_id[!data$doc_id %in% train.id]
+```
+```{r, echo=FALSE}
+rm(reviews, games)
+```
+
+## 3. Clean data
+
+### 3.1 Remove Tags
+The Start of the reviews had tags in them which provide further information. These are removed and put into a separate column. 
+```{r}
+data$is.early <- ifelse(grepl("Early Access Review", data$user_review), 1, 0)
+data$user_review <- gsub("Early Access Review","", data$user_review)
+data.kaggle$user_review <- gsub("Early Access Review","", data.kaggle$user_review)
+
+data$received.free <- ifelse(grepl("Product received for free", data$user_review), 1, 0)
+data$user_review <- gsub("Product received for free","", data$user_review)
+data.kaggle$user_review <- gsub("Product received for free","", data.kaggle$user_review)
+
+
+data$user_review <- gsub("Access Review", "", data$user_review) #unclear, just remove it
+data.kaggle$user_review <- gsub("Access Review","", data.kaggle$user_review)
+```
+
+```{r}
+# Tokenize descriptions
+reviewtokens=tokens(data$user_review,what="word",
+                    remove_numbers=TRUE,remove_punct=TRUE, remove_symbols=TRUE)
+```
+
+
+```{r}
+# Lowercase the tokens
+reviewtokens=tokens_tolower(reviewtokens)
+
+term_count <- freq_terms(reviewtokens, 20)
+plot(term_count)
+```
+
+###3.2 Remove stop words 
+```{r}
+reviewtokens=tokens_select(reviewtokens, stopwords("english"), selection = "remove")
+
+term_count <- freq_terms(reviewtokens, 20)
+plot(term_count)
+```
+
+
+###3.3 Remoce unnecessary words
+```{r}
+rmwords <- c("game", "can", "get", "play", "games", "playing", "really", "now", "people", "much", "also", "played", "players", "lot", "many", "hours", "just", "time", "one", "i", "im", "even", "on", "player", "because", "etc",
+             "░", "$", "+", "-", ">", "<", "!", "@", "#", "?")
+
+reviewtokens=tokens_remove(reviewtokens,rmwords)
+term_count <- freq_terms(reviewtokens, 20)
+plot(term_count)
+```
+
+###3.4 Stemming
+```{r}
+# Stemming tokens
+reviewtokens=tokens_wordstem(reviewtokens,language = "english")
+reviewtokens=tokens_ngrams(reviewtokens,n=1:2)
+
+```
+
+```{r}
+# Creating a bag of words
+reviewtokensdfm=dfm(reviewtokens,tolower = FALSE)
+
+# Remove sparsity
+reviewSparse <- convert(reviewtokensdfm, "tm")
+tm::removeSparseTerms(reviewSparse, 0.7)
+
+# Create the dfm
+dfm_trim(reviewtokensdfm, min_docfreq = 0.3)
+x=dfm_trim(reviewtokensdfm, sparsity = 0.98)
+```
+
+```{r}
+## Setup a dataframe with features
+df=convert(x,to="data.frame")
+
+##Add the Y variable Recommend.IND
+reviewtokensdf=cbind(data$user_suggestion,df)
+head(reviewtokensdf)
+
+## Cleanup names
+names(reviewtokensdf)[names(reviewtokensdf) == "data$user_suggestion"] <- "suggestion"
+
+#names(reviewtokensdf)=make.names(names(reviewtokensdf))
+head(reviewtokensdf)
+
+## Remove the original review.text column
+reviewtokensdf=reviewtokensdf[,-c(2)]
+head(reviewtokensdf)
+reviewtokensdf$suggestion=factor(reviewtokensdf$suggestion)
+
+```
+
+```{r}
+###Split into train and test
+split1<- sample(c(rep(0, 0.7 * nrow(reviewtokensdf)), rep(1, 0.3 * nrow(reviewtokensdf))))
+train <- reviewtokensdf[split1 == 0, ]        
+test <- reviewtokensdf[split1== 1, ]    
+```
+#Train Models
+##1. Decision tress
+```{r}
+tree.model <- rpart(suggestion~., data=train, method = 'class')
+```
+
+###Prediction
+```{r}
+actual_class <- test$suggestion
+predicted_class <- predict(tree.model, newdata = test, type = "class")
+tab_class <- table(actual_class, predicted_class)
+tab_class
+
+confusionMatrix(tab_class, mode = "everything")
+
+```
+The results is only 0.4378
+
+##2. Naive bayes
+```{r}
+naive.bayes <- naiveBayes(suggestion~., data=train, distribution = "multinomial", 
+                            prior = "termfreq")
+```
+
+###Prediction
+```{r}
+predict.naive = predict(naive.bayes, newdata = test)
+actual_class <- test$suggestion
+tab_class <- table(actual_class, predict.naive)
+tab_class
+
+confusionMatrix(tab_class, mode = "everything")
+```
+
+The result is better in this model (0.5736)
+
+
+##3. SVM
+```{r}
+svm.model = svm(formula = suggestion ~ .,
+                data = train,
+                type = 'C-classification',
+                kernel = 'linear')
+```
+
+###Prediction
+```{r}
+actual_class <- test$suggestion
+predicted_class <- predict(fit.svm, newdata = test)
+tab_class <- table(actual_class, predicted_class)
+tab_class
+
+confusionMatrix(tab_class, mode = "everything")
+```
+
+##4. KNN
+```{r}
+library(caret)
+# Run algorithms using 10-fold cross validation
+control <- trainControl(method="cv", number=10)
+
+# kNN
+set.seed(7)
+fit.knn <- train(suggestion~., data=train, method="knn", metric=metric, trControl=control)
+```
+
+###Prediction
+```{r}
+actual_class <- test$suggestion
+predicted_class <- predict(fit.knn, newdata = test)
+tab_class <- table(actual_class, predicted_class)
+tab_class
+
+confusionMatrix(tab_class, mode = "everything")
+```
+
+
+##5. CART model
+```{r}
+tree=rpart(formula = suggestion ~ ., data = train, method="class",control = rpart.control(minsplit = 200,  minbucket = 30, cp = 0.0001))
 
 printcp(tree)
 plotcp(tree)
@@ -484,96 +689,52 @@ prp(ptree, faclen = 0, cex = 0.5, extra = 2)
 
 ###Prediction
 ```{r}
-actual_class <- test$user_suggestion
-predicted_class <- predict(tree, newdata = data.test)
+actual_class <- test$suggestion
+predicted_class <- predict(tree, newdata = test)
 tab_class <- table(actual_class, predicted_class)
 tab_class
 
 confusionMatrix(tab_class, mode = "everything")
 ```
 
-##5. Random Forest model
+
+##6. LASSO 
 ```{r}
-library(randomForest)
-reviewRF=randomForest(user_suggestion~., data=data.train)
-varImpPlot(reviewRF, cex=.7)
+library(glmnet)
+#convert training data to matrix format
+x <- model.matrix(suggestion~.,train)
+#convert class to numerical variable
+y <- as.numeric(train$suggestion)
+#perform grid search to find optimal value of lambda
+cv.out <- cv.glmnet(x,y,alpha=1,family="binomial",type.measure = "mse" )
+
+
+#min value of lambda
+lambda_min <- cv.out$lambda.min
+#best value of lambda
+lambda_1se <- cv.out$lambda.1se
+lambda_1se
+#regression coefficients
+coef=coef(cv.out,s=lambda_1se)
+lassocoef=as.matrix(coef(cv.out,s=lambda_1se))
+
+control <- rpart.control(minsplit = 20,
+                         minbucket = round(100 / 3),
+                         maxdepth = 30,
+                         cp = 0.01)
+
+tune_fit <- rpart(suggestion~., data=train, method = 'class', control = control)
 ```
 
 ###Prediction
 ```{r}
-actual_class <- test$user_suggestion
-predicted_class <- predict(reviewRF, newdata = data.test)
-tab_class <- table(actual_class, predicted_class)
+predict_1 <-predict(tune_fit, newdata = test, type = 'class')
+tab_class <- table(actual_class, predict_1)
 tab_class
-
-confusionMatrix(tab_class, mode = "everything")
-
-```
-
-##6. Decision tress
-```{r}
-tree.model <- rpart(user_suggestion~., data=data.train, method = 'class')
-```
-
-###Prediction
-```{r}
-actual_class <- test$user_suggestion
-predicted_class <- predict(tree.model, newdata = data.test, type = "class")
-tab_class <- table(actual_class, predicted_class)
-tab_class
-
-confusionMatrix(tab_class, mode = "everything")
-
-```
-
-##7. SVM
-```{r}
-svm.model = svm(formula = user_suggestion ~ .,
-                data = data.train,
-                type = 'C-classification',
-                kernel = 'linear')
-```
-
-###Prediction
-```{r}
-actual_class <- test$user_suggestion
-predicted_class <- predict(fit.svm, newdata = data.test)
-tab_class <- table(actual_class, predicted_class)
-tab_class
-
 confusionMatrix(tab_class, mode = "everything")
 ```
 
-##8. KNN
-```{r}
-library(caret)
-# Run algorithms using 10-fold cross validation
-control <- trainControl(method="cv", number=10)
-metric <- "Accuracy"
 
+The scores are rather underwhelming. Since we also used other algorithm on Python which performed significantly better and actually beat naive bayes, compared to glmnet, xgboost and other models who did not, we didn't go any further in tuning. 
 
-# kNN
-set.seed(7)
-fit.knn <- train(user_suggestion~., data=data.train, method="knn", metric=metric, trControl=control)
-
-```
-
-###Prediction
-```{r}
-actual_class <- test$user_suggestion
-predicted_class <- predict(fit.knn, newdata = data.test)
-tab_class <- table(actual_class, predicted_class)
-tab_class
-
-confusionMatrix(tab_class, mode = "everything")
-```
-##Discussion
-First, we did did a lot of preprocessing: turing it into right format (docterm matrix) with stemming, removing punctioation, and removing stopwords. There, we made sure not to use the whole standard dictionary since that contains some words we want to keep (e.g. "not"). Then, we trimmed it and reduced dimensionality for some compuational intensive models. We then used this prepared data for our models. 
-
-However, the performance is rather underwhelming. Since we also used other algorithms on Python which performed significantly better and actually beat naive bayes, glmnet, random forrest, knn and xgboost and other models by a very large margin, we ended up not doing as much tuning as planned. 
-
-If we were to further try it with we would do the following things: 
-1. tune more: make a (larger) grid and run tuning for longer. 
-2. Try it with 2-grams more. We tried 2-grams with naive bayes and Glmnet but it didn't yield better results, so went back to 1-grams. We could also try it with XGboost or other methods or even try 3-grams etc. 
-3. We could use other dimensionality reducing techniques or refrain form using the reduced dataset for glmnet or xgboost. 
-To conclude, we attenpted some tuning but after seeing the differences in performance did not pursue it more since we did not think that we could rival the performance of the python models. 
+If we were to further try it with XGBosst we would try the following things: 1. tune more here, make a larger grid run tuning for longer. 2. Try it with 2-grams more. We tried 2-grams with naive bayes and Glmnet but it didn't yield better results, so went back to 1-grams. We could also try it with XGboost or even try 3-grams etc. 3. we could use other dimensionality reducing techniques or refrain form using the reduced dataset for glmnet or xgboost. Since we would expect that to take more time to tune and it already takes long now, we also didn't do it. 
